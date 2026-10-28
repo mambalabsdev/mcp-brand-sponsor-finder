@@ -1,0 +1,30 @@
+{
+  "name": "mcp-brand-sponsor-finder",
+  "displayName": "Brand Sponsor Finder",
+  "version": "1.0.0",
+  "description": "MCP server for Brand Sponsor Finder. Find brands that pay creators in a niche, from YouTube descriptions, podcast show notes, newsletters, event sponsor pages, partnership jobs, and creator programs, with evidence links. Runs on Apify.",
+  "author": {
+    "name": "Mamba Labs",
+    "email": "labs@mambamindsetgrowth.com"
+  },
+  "homepage": "https://mambabuilt.com",
+  "repository": "https://github.com/mambalabsdev/mcp-brand-sponsor-finder",
+  "license": "MIT",
+  "category": "productivity",
+  "tags": [
+    "brand-sponsors",
+    "sponsorship",
+    "creator-economy",
+    "influencer-marketing",
+    "youtube"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "brand-sponsors",
+    "sponsorship",
+    "creator-economy",
+    "influencer-marketing"
+  ],
+  "mcpServers": ".mcp.json"
+}

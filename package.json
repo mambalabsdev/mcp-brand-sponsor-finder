@@ -1,0 +1,51 @@
+{
+  "name": "@mambalabsdev/mcp-brand-sponsor-finder",
+  "version": "1.0.0",
+  "description": "MCP server for Brand Sponsor Finder. Find brands that pay creators in a niche, from YouTube descriptions, podcast show notes, newsletters, event sponsor pages, partnership jobs, and creator programs, with evidence links. Runs on Apify.",
+  "type": "module",
+  "bin": {
+    "mcp-brand-sponsor-finder": "./build/index.js"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x build/index.js",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "brand-sponsors",
+    "sponsorship",
+    "creator-economy",
+    "influencer-marketing",
+    "youtube",
+    "podcast",
+    "clay",
+    "apify"
+  ],
+  "author": "Mamba Labs <labs@mambamindsetgrowth.com>",
+  "license": "MIT",
+  "homepage": "https://apify.com/mambalabs/brand-sponsor-finder",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mambalabsdev/mcp-brand-sponsor-finder"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "5.9.3"
+  },
+  "mcpName": "com.mambabuilt/mcp-brand-sponsor-finder"
+}

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "mamba-brand-sponsor-finder": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mambalabsdev/mcp-brand-sponsor-finder"
+      ],
+      "env": {
+        "APIFY_TOKEN": "your-apify-token"
+      }
+    }
+  }
+}
