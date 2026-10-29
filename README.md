@@ -26,6 +26,16 @@ Find the brands that paid creators in a niche in the last 90 days, with the publ
 
 All of the work runs on Apify. This package is a thin client that starts the actor run, waits for it, and hands back the dataset rows.
 
+## Row cap and paging
+
+One run can return hundreds of rows (633 rows and about 0.8 MB of text on a 30 day health and fitness search), which is more than an agent context holds. So each call returns at most `max_rows` rows: 50 unless you set it, and never more than 200.
+
+1. The first call starts the run and returns the first page. The first content block is the JSON array of rows. The second is a paging block with `run_id`, `total_rows`, `rows_returned`, and `next_cursor`.
+2. To get the next page, call `find_brand_sponsors` again with only `cursor` set to `next_cursor`. Add `max_rows` to change the page size.
+3. Repeat until `next_cursor` is `null`.
+
+A cursor call starts no run. It reads the next page of rows the first run already wrote, so no row is billed twice. A cursor works for as long as Apify keeps that run's dataset.
+
 ## Quick start
 
 You need Node.js 18 or newer and an Apify account with an API token.
@@ -75,7 +85,7 @@ Restart the client. The `find_brand_sponsors` tool appears.
 
 ## Inputs
 
-Every buyer facing input of the actor, unchanged. Omitted inputs take the actor's own defaults. Numbers and booleans are sent as strings.
+Every buyer facing input of the actor, unchanged, plus the two paging settings. Omitted inputs take the actor's own defaults. Numbers and booleans are sent as strings.
 
 | Input | Type | Description |
 |---|---|---|
@@ -96,6 +106,8 @@ Every buyer facing input of the actor, unchanged. Omitted inputs take the actor'
 | `max_issues_per_newsletter` | string | Newest issues read per newsletter. Whole number, default 8, at most 30. Sent as text so Clay works Default 8 |
 | `max_brands_to_check` | string | Brands, most sighted first, whose job boards and program pages are checked. Whole number, default 25, at most 200. Sent as text so Clay works Default 25 |
 | `max_charge_usd` | string | Optional. The run stops before it would charge more than this |
+| `max_rows` | string | Wrapper setting, not sent to the actor. Rows returned per call: whole number, default 50, at most 200 |
+| `cursor` | string | Wrapper setting, not sent to the actor. The `next_cursor` from the previous call. Starts no run and returns the next page of that run's rows |
 
 ## Pricing
 

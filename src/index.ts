@@ -61,7 +61,7 @@ async function runActor(
   actorPath: string,
   actorLabel: string,
   input: Record<string, unknown>,
-): Promise<ToolResult> {
+): Promise<ToolResult | { runId: string; datasetId: string }> {
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
   if (!APIFY_TOKEN) {
     return { isError: true, content: [{ type: "text", text: "APIFY_TOKEN is not set. Create a token at https://console.apify.com/account/integrations and set it as the APIFY_TOKEN environment variable." }] };
@@ -160,16 +160,66 @@ async function runActor(
     return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run ${runId} succeeded but reported no dataset, so there is nothing to return.` }] };
   }
 
-  // 4. Read the dataset.
+  return { runId, datasetId };
+}
+
+// ROW CAP AND CURSOR. One call with defaults returned 634 rows and 834,930
+// characters on 2026-10-29, more than an agent context holds. A call returns at
+// most max_rows rows (DEFAULT_MAX_ROWS unless set, never above MAX_ROWS_CEILING)
+// and a cursor for the rest. A cursor call reads the next page of the SAME
+// finished run's dataset and starts no run, so no row is produced or billed a
+// second time: Apify bills a row when the actor pushes it, never when it is read.
+const DEFAULT_MAX_ROWS = 50;
+const MAX_ROWS_CEILING = 200;
+
+type Cursor = { v: 1; run: string; ds: string; offset: number };
+
+function encodeCursor(c: Cursor): string {
+  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+
+function decodeCursor(text: string): Cursor | null {
+  try {
+    const c = JSON.parse(Buffer.from(text, "base64url").toString("utf8")) as Cursor;
+    if (c?.v !== 1 || typeof c.run !== "string" || typeof c.ds !== "string") return null;
+    if (!/^[A-Za-z0-9]+$/.test(c.run) || !/^[A-Za-z0-9]+$/.test(c.ds)) return null;
+    if (!Number.isInteger(c.offset) || c.offset < 0) return null;
+    return c;
+  } catch {
+    return null;
+  }
+}
+
+function parseMaxRows(value: unknown): number | string {
+  if (value === undefined || value === null || String(value).trim() === "") return DEFAULT_MAX_ROWS;
+  const n = Number(String(value).trim());
+  if (!Number.isInteger(n) || n < 1) return `max_rows must be a whole number from 1 to ${MAX_ROWS_CEILING}; got ${JSON.stringify(value)}.`;
+  return Math.min(n, MAX_ROWS_CEILING);
+}
+
+// Read one page of a finished run's dataset and return it with the paging block.
+async function readPage(
+  actorLabel: string,
+  runId: string,
+  datasetId: string,
+  offset: number,
+  limit: number,
+): Promise<ToolResult> {
+  const APIFY_TOKEN = process.env.APIFY_TOKEN;
+  if (!APIFY_TOKEN) {
+    return { isError: true, content: [{ type: "text", text: "APIFY_TOKEN is not set. Create a token at https://console.apify.com/account/integrations and set it as the APIFY_TOKEN environment variable." }] };
+  }
+  const headers = { Authorization: `Bearer ${APIFY_TOKEN}`, "User-Agent": USER_AGENT };
   let ds: Response;
   try {
-    ds = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?format=json`, { headers });
+    ds = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?format=json&offset=${offset}&limit=${limit}`, { headers });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { isError: true, content: [{ type: "text", text: `Could not read the ${actorLabel} dataset: ${message}` }] };
   }
   if (!ds.ok) {
-    return { isError: true, content: [{ type: "text", text: await httpError(ds) }] };
+    const gone = ds.status === 404 ? " Apify no longer keeps this run's dataset, so the cursor has expired; run the search again." : "";
+    return { isError: true, content: [{ type: "text", text: `Reading the ${actorLabel} dataset ${datasetId} failed with status ${ds.status}.${gone}` }] };
   }
 
   let items: unknown;
@@ -188,7 +238,32 @@ async function runActor(
     return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run did not return a dataset. ${detail}` }] };
   }
 
-  return { content: [{ type: "text", text: JSON.stringify(items, null, 2) }] };
+  // Apify sends the dataset's row count in this header on every page. The count
+  // settles a few seconds after the run ends (a live call on 2026-10-29 read 544
+  // on the first page and 633 on the last), so a full page always gets a cursor,
+  // even when the header says the run has no more rows.
+  const header = ds.headers.get("x-apify-pagination-total");
+  const next = offset + items.length;
+  const reported = header !== null && Number.isFinite(Number(header)) ? Number(header) : next;
+  const total = Math.max(reported, next);
+  const more = items.length > 0 && (next < total || items.length === limit);
+  const paging = {
+    run_id: runId,
+    dataset_id: datasetId,
+    total_rows: total,
+    offset,
+    rows_returned: items.length,
+    next_cursor: more ? encodeCursor({ v: 1, run: runId, ds: datasetId, offset: next }) : null,
+    note: more
+      ? `Rows ${offset + 1} to ${next} of ${total} so far. For the next page, call find_brand_sponsors again with only cursor set to next_cursor (add max_rows for a different page size). A cursor call starts no run and is not billed again.`
+      : `Last page: rows ${items.length ? offset + 1 : 0} to ${next} of ${total}. No rows remain.`,
+  };
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(items, null, 2) },
+      { type: "text", text: JSON.stringify(paging, null, 2) },
+    ],
+  };
 }
 
 const server = new McpServer({
@@ -203,7 +278,7 @@ server.registerTool(
   {
     title: "Find brands paying creators in a niche, with evidence",
     description:
-      "Find brands with recent public proof of paid placement in a niche. Give a niche (for example health and fitness, beauty and skincare, food and beverage) and optionally audience keywords, seed YouTube channels, podcast feeds, or newsletters, and event sponsor pages. The actor reads public YouTube descriptions, podcast show notes, newsletter issues, event sponsor pages, partnership job posts, and brand creator program pages, and returns one row per brand domain (sighting count, last seen date, sources, creators or events sponsored, public contact, recency score) and one row per sighting (brand, domain, source, creator or event, date, evidence link, promo code, placement type, pitch angle). Instagram, TikTok, and the Meta Ad Library are not read. Input with nothing to run returns one free row whose error_reason starts with input_invalid:. A run that does not succeed is returned as an error with its run ID. Read-only; requires an APIFY_TOKEN; Apify charges per brand row, per sighting row, and per run start.",
+      "Find brands with recent public proof of paid placement in a niche. Give a niche (for example health and fitness, beauty and skincare, food and beverage) and optionally audience keywords, seed YouTube channels, podcast feeds, or newsletters, and event sponsor pages. The actor reads public YouTube descriptions, podcast show notes, newsletter issues, event sponsor pages, partnership job posts, and brand creator program pages, and returns one row per brand domain (sighting count, last seen date, sources, creators or events sponsored, public contact, recency score) and one row per sighting (brand, domain, source, creator or event, date, evidence link, promo code, placement type, pitch angle). Instagram, TikTok, and the Meta Ad Library are not read. ROW CAP AND PAGING: a call returns at most max_rows rows (default 50, at most 200) as a JSON array in the first content block, and a paging block in the second with total_rows and next_cursor. To get every row, call again with only cursor set to next_cursor until next_cursor is null. A cursor call reads the same finished run's rows, starts no new run, and is not billed again. Input with nothing to run returns one free row whose error_reason starts with input_invalid:. A run that does not succeed is returned as an error with its run ID. Read-only; requires an APIFY_TOKEN; Apify charges per brand row, per sighting row, and per run start.",
     annotations: {
       title: "Find brands paying creators in a niche, with evidence",
       readOnlyHint: true,
@@ -229,11 +304,25 @@ server.registerTool(
       max_issues_per_newsletter: z.string().optional().describe("Newest issues read per newsletter. Whole number, default 8, at most 30. Sent as text so Clay works. Default 8."),
       max_brands_to_check: z.string().optional().describe("Brands, most sighted first, whose job boards and program pages are checked. Whole number, default 25, at most 200. Sent as text so Clay works. Default 25."),
       max_charge_usd: z.string().optional().describe("Optional. The run stops before it would charge more than this."),
+      max_rows: z.string().optional().describe("Wrapper setting, not sent to the actor. Rows returned per call: whole number, default 50, at most 200. Reach the rest of the run's rows with cursor."),
+      cursor: z.string().optional().describe("Wrapper setting, not sent to the actor. The next_cursor from the previous call's paging block. With a cursor the call starts no run and returns the next page of that run's rows, so nothing is billed again; every other input except max_rows is ignored."),
     },
   },
   // The buyer's own YouTube Data API key comes from this server's environment,
   // never from the conversation, and is passed to the actor as a secret input.
-  async (args) => runActor("PPgK6xrgOmvL7Nrys", "Brand Sponsor Finder", compact({ ...(args as Record<string, unknown>), ...(process.env.YOUTUBE_API_KEY ? { youtube_api_key: process.env.YOUTUBE_API_KEY } : {}) })),
+  async (args) => {
+    const { max_rows, cursor, ...actorArgs } = args as Record<string, unknown>;
+    const limit = parseMaxRows(max_rows);
+    if (typeof limit === "string") return { isError: true, content: [{ type: "text", text: limit }] };
+    if (cursor !== undefined && String(cursor).trim() !== "") {
+      const c = decodeCursor(String(cursor).trim());
+      if (!c) return { isError: true, content: [{ type: "text", text: "cursor is not a next_cursor this server issued. Pass the next_cursor value from the previous call's paging block unchanged." }] };
+      return readPage("Brand Sponsor Finder", c.run, c.ds, c.offset, limit);
+    }
+    const run = await runActor("PPgK6xrgOmvL7Nrys", "Brand Sponsor Finder", compact({ ...actorArgs, ...(process.env.YOUTUBE_API_KEY ? { youtube_api_key: process.env.YOUTUBE_API_KEY } : {}) }));
+    if ("content" in run) return run;
+    return readPage("Brand Sponsor Finder", run.runId, run.datasetId, 0, limit);
+  },
 );
 
 const transport = new StdioServerTransport();

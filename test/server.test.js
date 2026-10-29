@@ -91,7 +91,8 @@ test("serves tools/list with no APIFY_TOKEN set", async () => {
 test("tool schema exposes every live actor input", async () => {
   const result = await listTools();
   const props = Object.keys(result.tools[0].inputSchema.properties).sort();
-  assert.deepEqual(props, [...ACTOR_INPUTS].sort());
+  // max_rows and cursor are the wrapper's own paging settings, not actor inputs.
+  assert.deepEqual(props, [...ACTOR_INPUTS, "max_rows", "cursor"].sort());
 });
 
 test("tool schema requires exactly what the live actor requires", async () => {
